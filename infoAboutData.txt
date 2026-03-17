@@ -1,0 +1,28 @@
+Feathers of each sensor (8F)
+ΔR (steady-state resistance change)  ΔR = R_max − R_baseline
+|ΔR| (normalized)
+EMA rising (α = 0.001)
+EMA rising (α = 0.01)
+EMA rising (α = 0.1)
+EMA decay (α = 0.001)
+EMA decay (α = 0.01)
+EMA decay (α = 0.1)
+
+
+1 sample = 128 feature values
+
+there are 16 sensor and each sensor contains 8 feature so its 16*8 = 128
+
+Labels - 
+6 gases:
+Ethanol
+Ethylene
+Ammonia
+Acetaldehyde
+Acetone
+Toluene
+
+
+what this sensor actually - 
+They are metal-oxide semiconductor (MOS) sensors.
+

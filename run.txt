@@ -1,0 +1,63 @@
+================================================================================
+  Drift-Aware Relational Anomaly Detection — How to Run
+================================================================================
+
+PREREQUISITES:
+  - Python 3.10+ installed
+  - Dataset folder exists at: Dataset/ (with batch1.dat ... batch10.dat)
+
+────────────────────────────────────────────────────────────────────────────────
+STEP 1: Create & activate virtual environment (one-time setup)
+────────────────────────────────────────────────────────────────────────────────
+
+  cd E:\COLLEGE\Drift-Aware_Multimodel_Anomaly_Detection
+
+  python -m venv .venv
+  .venv\Scripts\Activate.ps1
+
+────────────────────────────────────────────────────────────────────────────────
+STEP 2: Install dependencies
+────────────────────────────────────────────────────────────────────────────────
+
+  pip install numpy pandas scikit-learn scipy matplotlib seaborn tqdm joblib
+  pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+  (If you have an NVIDIA GPU and want CUDA support, use instead:)
+  pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+────────────────────────────────────────────────────────────────────────────────
+STEP 3: Train the model
+────────────────────────────────────────────────────────────────────────────────
+
+  python train.py
+
+  → This trains the autoencoder + builds the relational module.
+  → Saves artifacts into the outputs/ folder:
+      outputs/autoencoder.pth
+      outputs/baseline_corr.npy
+      outputs/relation_models.pkl
+      outputs/scaler.pkl
+
+────────────────────────────────────────────────────────────────────────────────
+STEP 4: Evaluate & detect anomalies
+────────────────────────────────────────────────────────────────────────────────
+
+  python evaluate.py
+
+  → Loads trained artifacts from outputs/
+  → Scores all test samples (Batches 6–10)
+  → Prints anomaly counts per batch
+  → Generates plots in outputs/figures/:
+      score_distribution.png
+      scores_by_batch.png
+      temporal_vs_relational.png
+      anomaly_rate_by_batch.png
+  → Saves raw results to outputs/results.npz
+
+================================================================================
+  QUICK ONE-LINER (after dependencies are installed)
+================================================================================
+
+  python train.py ; python evaluate.py
+
+================================================================================
