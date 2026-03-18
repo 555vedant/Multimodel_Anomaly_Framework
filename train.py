@@ -123,7 +123,7 @@ def main() -> None:
     baseline_corr, pair_models = build_relational_module(train_scaled)
     save_relational_artifacts(baseline_corr, pair_models)
 
-    print("\n✓ Training complete. All artifacts saved to:", config.OUTPUT_DIR)
+    print("\nTraining complete. All artifacts saved to:", config.OUTPUT_DIR)
 
 
 if __name__ == "__main__":

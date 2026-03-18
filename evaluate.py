@@ -125,7 +125,7 @@ def main() -> None:
     print("  EVALUATION – Drift-Aware Anomaly Detection")
     print("=" * 60)
 
-    # ── 1. Load data ─────────────────────────────────────────────────────
+    # ── 1. Load data 
     df = load_all_batches()
     train_df, test_df = split_train_test(df)
     train_scaled, test_scaled, scaler = scale_data(train_df, test_df, save_scaler=False)
@@ -133,34 +133,35 @@ def main() -> None:
     input_dim = train_scaled.shape[1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ── 2. Load trained artifacts ────────────────────────────────────────
+    # ── 2. Load trained artifacts 
     model = load_trained_model(input_dim)
     _, pair_models = load_relational_artifacts()
 
-    # ── 3. Temporal errors ───────────────────────────────────────────────
+    # ── 3. Temporal errors 
     print("\n── Computing Temporal Errors ──")
     test_tensor = torch.tensor(test_scaled, dtype=torch.float32).to(device)
     temporal_errors = model.reconstruction_error(test_tensor).cpu().numpy()
-    print(f"  Temporal error  →  mean={temporal_errors.mean():.6f}  std={temporal_errors.std():.6f}")
+    print(f"  Temporal error  →  mean={temporal_errors.mean():.6f}  std={temporal_errors.std():.6f} Error : {temporal_errors}")
 
-    # ── 4. Relational errors ─────────────────────────────────────────────
+    # ── 4. relational errors 
     print("\n── Computing Relational Errors ──")
     relational_errors = compute_relational_errors(test_scaled, pair_models, desc="Test relational errors")
-    print(f"  Relational error →  mean={relational_errors.mean():.6f}  std={relational_errors.std():.6f}")
+    print(f"  Relational error →  mean={relational_errors.mean():.6f}  std={relational_errors.std():.6f} Error : {relational_errors}")
 
-    # ── 5. Combined scores ───────────────────────────────────────────────
+    # ── 5. Combined scores 
     scores = compute_combined_scores(temporal_errors, relational_errors)
 
-    # Compute threshold on *training* scores for a principled cutoff
+    # Compute threshold on training scores for a principled cutoff
     train_tensor = torch.tensor(train_scaled, dtype=torch.float32).to(device)
     train_temporal = model.reconstruction_error(train_tensor).cpu().numpy()
     train_relational = compute_relational_errors(train_scaled, pair_models, desc="Train relational errors")
     train_scores = compute_combined_scores(train_temporal, train_relational)
+    print(f"Combined score is {train_scores}")
     threshold = compute_threshold(train_scores, sigma=config.ANOMALY_SIGMA)
 
     anomalies = flag_anomalies(scores, threshold)
 
-    # ── 6. Report ────────────────────────────────────────────────────────
+    # ── 6. Report
     batch_ids = test_df["batch"].values
     print("\n" + "=" * 60)
     print("  RESULTS")
@@ -178,11 +179,11 @@ def main() -> None:
         rate = anomalies[mask].mean() * 100
         print(f"  Batch {b:>2}: {n_anom:>5} / {n_total:>5} anomalies  ({rate:.1f}%)")
 
-    # ── 7. Visualisations ────────────────────────────────────────────────
+    # ── 7. Visualisations
     fig_dir = os.path.join(config.OUTPUT_DIR, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
-    plot_score_distribution(scores, threshold, os.path.join(fig_dir, "score_distribution.png"))
+    # plot_score_distribution(scores, threshold, os.path.join(fig_dir, "score_distribution.png"))
     plot_scores_by_batch(scores, batch_ids, threshold, os.path.join(fig_dir, "scores_by_batch.png"))
     plot_error_components(
         temporal_errors / (temporal_errors.max() + 1e-12),
@@ -195,13 +196,13 @@ def main() -> None:
     # save raw scores
     np.savez(
         os.path.join(config.OUTPUT_DIR, "results.npz"),
-        scores=scores,
+        scores=scores,  
         temporal_errors=temporal_errors,
         relational_errors=relational_errors,
         anomalies=anomalies,
         batch_ids=batch_ids,
         threshold=threshold,
-    )
+    )   
     print(f"\n[evaluate] Raw results saved → {os.path.join(config.OUTPUT_DIR, 'results.npz')}")
     print("\n✓ Evaluation complete.")
 
