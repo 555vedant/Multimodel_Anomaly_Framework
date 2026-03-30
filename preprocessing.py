@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 import config
 
 
-# ── Loading ──────────────────────────────────────────────────────────────────
+# ── Loading
 
 def load_batch(file_path: str, batch_id: int) -> pd.DataFrame:
     """Load a single batch .dat (libsvm) file and return a DataFrame."""
@@ -40,7 +40,7 @@ def load_all_batches(folder: str | None = None) -> pd.DataFrame:
     return df
 
 
-# ── Splitting ────────────────────────────────────────────────────────────────
+# ── Splitting 
 
 def split_train_test(
     df: pd.DataFrame,
@@ -54,14 +54,14 @@ def split_train_test(
     return train_df, test_df
 
 
-# ── Feature columns helper ───────────────────────────────────────────────────
+# ── Feature columns helper 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
     """Return the list of numeric feature column names (exclude batch/label)."""
     return [c for c in df.columns if c not in ("batch", "label")]
 
 
-# ── Scaling ──────────────────────────────────────────────────────────────────
+# ── Scaling 
 
 def scale_data(
     train_df: pd.DataFrame,
