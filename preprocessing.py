@@ -45,11 +45,24 @@ def load_all_batches(folder: str | None = None) -> pd.DataFrame:
 def split_train_test(
     df: pd.DataFrame,
     train_batches: list[int] | None = None,
+    test_batches: list[int] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split by batch number. Returns (train_df, test_df)."""
     train_batches = train_batches or config.TRAIN_BATCHES
+    test_batches = test_batches or config.TEST_BATCHES
+
+    overlap = set(train_batches).intersection(test_batches)
+    if overlap:
+        raise ValueError(f"Train and test batches overlap: {sorted(overlap)}")
+
     train_df = df[df["batch"].isin(train_batches)].copy()
-    test_df = df[~df["batch"].isin(train_batches)].copy()
+    test_df = df[df["batch"].isin(test_batches)].copy()
+
+    if len(train_df) == 0 or len(test_df) == 0:
+        raise ValueError(
+            "Empty train/test split. Check TRAIN_BATCHES and TEST_BATCHES in config."
+        )
+
     print(f"[preprocessing] Train: {len(train_df)} samples  |  Test: {len(test_df)} samples")
     return train_df, test_df
 

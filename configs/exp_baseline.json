@@ -1,0 +1,22 @@
+{
+  "EXPERIMENT_NAME": "exp_baseline",
+  "TRAIN_BATCHES": [1, 2, 3, 4, 5],
+  "TEST_BATCHES": [6, 7, 8, 9, 10],
+  "HIDDEN_DIM": 64,
+  "LATENT_DIM": 32,
+  "DROPOUT": 0.2,
+  "EPOCHS": 100,
+  "BATCH_SIZE": 256,
+  "LR": 0.001,
+  "WEIGHT_DECAY": 1e-05,
+  "EARLY_STOP_PATIENCE": 10,
+  "CORR_THRESHOLD": 0.7,
+  "MAX_CORR_PAIRS": 500,
+  "ALPHA": 0.6,
+  "BETA": 0.4,
+  "SCORE_NORM_METHOD": "minmax",
+  "THRESHOLD_METHOD": "mean_std",
+  "ANOMALY_SIGMA": 2.0,
+  "ANOMALY_PERCENTILE": 98.0,
+  "SEED": 42
+}

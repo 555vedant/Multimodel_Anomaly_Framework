@@ -18,7 +18,7 @@ from tqdm import tqdm
 import config
 
 
-# ── Data structures ──────────────────────────────────────────────────────────
+# ── Data structures 
 
 @dataclass
 class PairModel:
@@ -30,7 +30,7 @@ class PairModel:
     train_residual_std: float   # std of residuals on training data (for z-scoring)
 
 
-# ── Fitting ──────────────────────────────────────────────────────────────────
+# ── Fitting 
 
 def compute_baseline_correlations(train_data: np.ndarray) -> np.ndarray:
     """Return the full correlation matrix of the training features."""
@@ -51,6 +51,8 @@ def select_correlated_pairs(
     for i in range(n):
         for j in range(i + 1, n):
             r = abs(corr_matrix[i, j])
+            if not np.isfinite(r):
+                continue
             if r >= threshold:
                 pairs.append((i, j, r))
     # sort by strength, keep top-k
@@ -69,8 +71,17 @@ def fit_pair_models(
     for i, j in pairs:
         xi = train_data[:, i]
         xj = train_data[:, j]
-        # closed-form OLS:  xj = slope * xi + intercept
-        slope, intercept = np.polyfit(xi, xj, deg=1)
+
+        if np.std(xi) < 1e-12:
+            # Predictor is near-constant: fallback to slope 0 and mean target.
+            slope = 0.0
+            intercept = float(np.mean(xj))
+        else:
+            # closed-form OLS:  xj = slope * xi + intercept
+            slope, intercept = np.polyfit(xi, xj, deg=1)
+            if not (np.isfinite(slope) and np.isfinite(intercept)):
+                continue
+
         residuals = xj - (slope * xi + intercept)
         std = residuals.std() + 1e-8  # avoid division by zero
         models.append(PairModel(i=i, j=j, slope=slope, intercept=intercept, train_residual_std=std))
@@ -106,7 +117,7 @@ def load_relational_artifacts() -> tuple[np.ndarray, list[PairModel]]:
     return baseline_corr, pair_models
 
 
-# ── Per-sample relational error ──────────────────────────────────────────────
+# ── Per-sample relational error 
 
 def relational_error_single(sample: np.ndarray, pair_models: list[PairModel]) -> float:
     """

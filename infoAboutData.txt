@@ -25,4 +25,15 @@ Toluene
 
 what this sensor actually - 
 They are metal-oxide semiconductor (MOS) sensors.
+Total Samples: 13,910 samples across all 10 batches.
+Why 128 Features?: The hardware has 16 sensors. Since each sensor generates 8 features, a single sample produces 
+16
+×
+8
+=
+128
+16×8=128 features.
+Training vs. Testing Split:
+Training: 3,633 samples (from Batches 1–5)
+Testing: 10,277 samples (from Batches 6–10)
 

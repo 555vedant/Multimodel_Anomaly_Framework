@@ -1,0 +1,4 @@
+experiment,threshold,anomalies,anomaly_rate_percent,score_mean,score_std,threshold_method,alpha,beta,corr_threshold
+exp_baseline,0.061098,234,2.277,0.006535,0.026115,mean_std,0.6,0.4,0.7
+exp_sensitive,0.511798,237,2.306,0.040397,0.129314,percentile,0.55,0.45,0.65
+exp_conservative,0.383599,288,2.802,0.041288,0.130076,mean_std,0.7,0.3,0.75

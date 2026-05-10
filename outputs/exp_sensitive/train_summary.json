@@ -1,0 +1,7 @@
+{
+  "experiment": "exp_sensitive",
+  "output_dir": "E:\\COLLEGE\\Drift-Aware_Multimodel_Anomaly_Detection\\outputs\\exp_sensitive",
+  "best_train_loss": 0.05806802477746045,
+  "best_epoch": 120,
+  "num_pair_models": 500
+}

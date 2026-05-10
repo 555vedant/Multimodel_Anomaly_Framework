@@ -4,16 +4,18 @@ persists all artifacts to the outputs/ directory.
 
 Usage:
     python train.py
+    python train.py --config configs/exp_baseline.json
 """
 
 import os
 import random
+import argparse
+import json
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
 
 import config
 from preprocessing import load_all_batches, split_train_test, scale_data
@@ -32,7 +34,7 @@ def seed_everything(seed: int = config.SEED) -> None:
 def train_autoencoder(
     train_data: np.ndarray,
     input_dim: int,
-) -> Autoencoder:
+) -> tuple[Autoencoder, float, int]:
     """Train the temporal autoencoder with mini-batches and early stopping."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train] Using device: {device}")
@@ -52,6 +54,7 @@ def train_autoencoder(
     criterion = nn.MSELoss()
 
     best_loss = float("inf")
+    best_epoch = 0
     patience_counter = 0
 
     for epoch in range(1, config.EPOCHS + 1):
@@ -60,16 +63,9 @@ def train_autoencoder(
         for (batch_x,) in loader:
             batch_x = batch_x.to(device)
             optimizer.zero_grad()
-            # print("check1")
             recon = model(batch_x)
-            # print("check2")
-
             loss = criterion(recon, batch_x)
-            # print("check3")
-
             loss.backward()
-            # print("check4")
-
             optimizer.step()
             epoch_loss += loss.item() * batch_x.size(0)
 
@@ -83,6 +79,7 @@ def train_autoencoder(
         # early stopping
         if epoch_loss < best_loss - 1e-6:
             best_loss = epoch_loss
+            best_epoch = epoch
             patience_counter = 0
             # save best weights
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
@@ -96,34 +93,62 @@ def train_autoencoder(
     # reload best weights
     model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device, weights_only=True))
     model.to(device)
-    print(f"[train] Autoencoder saved → {config.MODEL_PATH}")
-    return model
+    print(f"[train] Best model saved -> {config.MODEL_PATH}")
+    print(f"[train] Best loss={best_loss:.6f} at epoch {best_epoch}")
+    return model, best_loss, best_epoch
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train drift-aware anomaly model")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to JSON config overrides (optional)",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
+    args = parse_args()
+    if args.config:
+        config.apply_overrides_from_json(args.config)
+
     seed_everything()
 
-    # ── Data ─────────────────────────────────────────────────────────────
-    print("=" * 60)
-    print("  TRAINING – Drift-Aware Anomaly Detection")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print(f"TRAINING | experiment={config.EXPERIMENT_NAME} | output={config.OUTPUT_DIR}")
+    print("=" * 70)
     df = load_all_batches()
     train_df, test_df = split_train_test(df)
-    train_scaled, test_scaled, scaler = scale_data(train_df, test_df)
+    train_scaled, _, _ = scale_data(train_df, test_df)
 
     input_dim = train_scaled.shape[1]
     print(f"[train] Feature dimension: {input_dim}")
 
     # ── Temporal module ──────────────────────────────────────────────────
     print("\n── Training Temporal Autoencoder ──")
-    model = train_autoencoder(train_scaled, input_dim)
+    _, best_loss, best_epoch = train_autoencoder(train_scaled, input_dim)
 
     # ── Relational module ────────────────────────────────────────────────
     print("\n── Building Relational Module ──")
     baseline_corr, pair_models = build_relational_module(train_scaled)
     save_relational_artifacts(baseline_corr, pair_models)
 
-    print("\nTraining complete. All artifacts saved to:", config.OUTPUT_DIR)
+    summary = {
+        "experiment": config.EXPERIMENT_NAME,
+        "output_dir": config.OUTPUT_DIR,
+        "best_train_loss": float(best_loss),
+        "best_epoch": int(best_epoch),
+        "num_pair_models": int(len(pair_models)),
+    }
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    summary_path = os.path.join(config.OUTPUT_DIR, "train_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    print(f"[train] Saved summary -> {summary_path}")
+
+    print("\n[train] Training complete")
 
 
 if __name__ == "__main__":

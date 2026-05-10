@@ -1,0 +1,59 @@
+{
+  "experiment": "exp_sensitive",
+  "output_dir": "E:\\COLLEGE\\Drift-Aware_Multimodel_Anomaly_Detection\\outputs\\exp_sensitive",
+  "threshold_method": "percentile",
+  "threshold": 0.5117981112426931,
+  "num_test_samples": 10277,
+  "num_anomalies": 237,
+  "anomaly_rate_percent": 2.3061204631701857,
+  "score_mean": 0.04039718636120939,
+  "score_std": 0.12931449377891643,
+  "per_batch": {
+    "6": {
+      "total": 2300,
+      "anomalies": 0,
+      "rate_percent": 0.0,
+      "score_mean": 0.008747803789318982
+    },
+    "7": {
+      "total": 3613,
+      "anomalies": 0,
+      "rate_percent": 0.0,
+      "score_mean": 0.019244879605580356
+    },
+    "8": {
+      "total": 294,
+      "anomalies": 1,
+      "rate_percent": 0.3401360544217687,
+      "score_mean": 0.01696373060153787
+    },
+    "9": {
+      "total": 470,
+      "anomalies": 1,
+      "rate_percent": 0.2127659574468085,
+      "score_mean": 0.0070693921946604526
+    },
+    "10": {
+      "total": 3600,
+      "anomalies": 235,
+      "rate_percent": 6.527777777777779,
+      "score_mean": 0.08811117621539191
+    }
+  },
+  "hyperparameters": {
+    "alpha": 0.55,
+    "beta": 0.45,
+    "score_norm_method": "robust",
+    "sigma": 2.0,
+    "percentile": 97.5,
+    "corr_threshold": 0.65,
+    "max_corr_pairs": 700,
+    "hidden_dim": 128,
+    "latent_dim": 48,
+    "dropout": 0.15,
+    "epochs": 140,
+    "batch_size": 256,
+    "lr": 0.0008,
+    "weight_decay": 1e-05
+  }
+}

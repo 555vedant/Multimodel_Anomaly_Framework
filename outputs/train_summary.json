@@ -1,0 +1,7 @@
+{
+  "experiment": "default",
+  "output_dir": "E:\\COLLEGE\\Drift-Aware_Multimodel_Anomaly_Detection\\outputs",
+  "best_train_loss": 0.12862488334578587,
+  "best_epoch": 87,
+  "num_pair_models": 500
+}

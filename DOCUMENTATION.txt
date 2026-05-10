@@ -1,716 +1,84 @@
 ================================================================================
-        DRIFT-AWARE RELATIONAL ANOMALY DETECTION IN MULTIVARIATE
-                       SENSOR SYSTEMS — DOCUMENTATION
+DRIFT-AWARE RELATIONAL ANOMALY DETECTION IN MULTIVARIATE SENSOR SYSTEMS
+PROJECT REPORT & CONTEXT DOCUMENT
 ================================================================================
 
-
-TABLE OF CONTENTS
-─────────────────
-  1. Project Overview
-  2. Dataset Explained
-  3. Core Idea (Why Two Error Types?)
-  4. Complete Execution Flow
-  5. File-by-File Detailed Breakdown
-     5.1  config.py
-     5.2  preprocessing.py
-     5.3  temporal_model.py
-     5.4  relational_model.py
-     5.5  anomaly_score.py
-     5.6  train.py
-     5.7  evaluate.py
-  6. What Gets Saved Where (outputs/ Folder)
-  7. How Anomalies Are Actually Detected
-  8. Hyperparameter Tuning Guide
-
-
-================================================================================
-1. PROJECT OVERVIEW
-================================================================================
-
-This project builds a FULLY UNSUPERVISED anomaly detection system for
-industrial IoT sensor data.  "Unsupervised" means:
-
-  - We NEVER use the gas-type labels (1–6) during training.
-  - We learn what "normal" looks like from Batches 1–5 only.
-  - Anything in Batches 6–10 that deviates from "normal" is flagged.
-
-The system has TWO independent detection paths that are combined:
-
-  PATH A — Temporal (Autoencoder)
-    "Does this sample's feature values look normal individually?"
-
-  PATH B — Relational (Correlation Pair Models)
-    "Do the relationships BETWEEN sensors still hold?"
-
-A sample can look normal on Path A but anomalous on Path B (or vice versa).
-The combined score catches both.
-
-
-================================================================================
-2. DATASET EXPLAINED
-================================================================================
-
-Source:  UCI Gas Sensor Array Drift Dataset
-URL:     https://archive.ics.uci.edu/ml/datasets/Gas+Sensor+Array+Drift+Dataset
-
-Hardware:
-  - 16 metal-oxide semiconductor (MOS) chemical sensors
-  - Exposed to 6 different gases over 36 months
-
-Each experiment produces one row with 128 features:
-  16 sensors × 8 engineered features per sensor = 128
-
-The 8 features per sensor are:
-  1. ΔR          — steady-state resistance change (R_max − R_baseline)
-  2. |ΔR|        — absolute/normalised resistance change
-  3. EMA α=0.001 — exponential moving avg (rising phase, slow)
-  4. EMA α=0.01  — exponential moving avg (rising phase, medium)
-  5. EMA α=0.1   — exponential moving avg (rising phase, fast)
-  6. EMA α=0.001 — exponential moving avg (decay phase, slow)
-  7. EMA α=0.01  — exponential moving avg (decay phase, medium)
-  8. EMA α=0.1   — exponential moving avg (decay phase, fast)
-
-Dataset files (in Dataset/ folder):
-  batch1.dat   — earliest collected data
-  batch2.dat
-  ...
-  batch10.dat  — latest collected data (36 months later)
-
-Each .dat file is in LIBSVM sparse format:
-  label feat1:value1 feat2:value2 ... feat128:value128
-
-Total: 13,910 experiments across all 10 batches.
-
-Labels (1–6 = gas type) exist but are NOT used for training.
-We only use them conceptually to understand the data; the model never sees them.
-
-Why batches matter:
-  Over 36 months, sensors physically degrade (sensor drift).
-  Early batches = "fresh" sensors.  Late batches = "degraded" sensors.
-  This natural drift is exactly what our system aims to detect.
-
-
-================================================================================
-3. CORE IDEA — WHY TWO ERROR TYPES?
-================================================================================
-
-Imagine 16 temperature sensors in a factory:
-
-SCENARIO A — Individual Anomaly:
-  Sensor 5 suddenly reads 500°C when all others read 25°C.
-  → The autoencoder catches this easily because the feature VALUE is extreme.
-  → This is a TEMPORAL (reconstruction) error.
-
-SCENARIO B — Relational Anomaly:
-  Sensors 1 and 2 always move together (correlation = 0.95).
-  Today Sensor 1 reads 30°C and Sensor 2 reads 30°C.
-  Both values look perfectly normal individually.
-  But historically, when Sensor 1 = 30°C, Sensor 2 should be 28°C.
-  → The autoencoder sees nothing wrong (both values are in range).
-  → But the RELATIONSHIP between them has broken.
-  → This is a RELATIONAL error.
-
-Our system catches BOTH types by combining them:
-
-  S = α × E_temporal + β × E_relational
-
-  α = 0.6 (60% weight on individual feature reconstruction)
-  β = 0.4 (40% weight on cross-sensor relationship deviation)
-
-
-================================================================================
-4. COMPLETE EXECUTION FLOW
-================================================================================
-
-The system runs in two phases: TRAIN then EVALUATE.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         PHASE 1: python train.py                            │
-│                                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐              │
-│  │ Dataset/     │───→│preprocessing │───→│ train_scaled      │              │
-│  │ batch1-10.dat│    │ .py          │    │ (3633 × 128 array)│              │
-│  └──────────────┘    └──────────────┘    └─────────┬─────────┘              │
-│                                                     │                        │
-│                              ┌──────────────────────┴──────────┐            │
-│                              │                                  │            │
-│                              ▼                                  ▼            │
-│                   ┌─────────────────┐              ┌────────────────────┐   │
-│                   │ TEMPORAL PATH   │              │ RELATIONAL PATH    │   │
-│                   │ Autoencoder     │              │ Correlation +      │   │
-│                   │ (temporal_model │              │ Linear Pair Models │   │
-│                   │  .py)           │              │ (relational_model  │   │
-│                   │                 │              │  .py)              │   │
-│                   └────────┬────────┘              └────────┬───────────┘   │
-│                            │                                │                │
-│                            ▼                                ▼                │
-│                   outputs/autoencoder.pth      outputs/baseline_corr.npy    │
-│                                                outputs/relation_models.pkl  │
-│                                                outputs/scaler.pkl           │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                       PHASE 2: python evaluate.py                           │
-│                                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐              │
-│  │ Dataset/     │───→│preprocessing │───→│ test_scaled       │              │
-│  │ batch1-10.dat│    │ .py          │    │ (10277×128 array) │              │
-│  └──────────────┘    └──────────────┘    └─────────┬─────────┘              │
-│                                                     │                        │
-│         ┌──────────────────────┬────────────────────┘                        │
-│         │                      │                                             │
-│         ▼                      ▼                                             │
-│  ┌──────────────┐      ┌──────────────┐                                     │
-│  │ Load trained │      │ Load pair    │                                     │
-│  │ autoencoder  │      │ models       │                                     │
-│  └──────┬───────┘      └──────┬───────┘                                     │
-│         │                      │                                             │
-│         ▼                      ▼                                             │
-│  Per-sample MSE         Per-sample mean                                     │
-│  reconstruction         squared z-scored                                    │
-│  error (1-D array)      residual (1-D array)                                │
-│         │                      │                                             │
-│         └──────────┬───────────┘                                             │
-│                    ▼                                                         │
-│         ┌──────────────────┐                                                │
-│         │ anomaly_score.py │                                                │
-│         │ S = α·T + β·R   │                                                │
-│         │ (min-max normed) │                                                │
-│         └────────┬─────────┘                                                │
-│                  ▼                                                           │
-│         Score > threshold? ──→ ANOMALY                                      │
-│                                                                              │
-│         Plots saved to outputs/figures/                                      │
-│         Raw data saved to outputs/results.npz                               │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-
-================================================================================
-5. FILE-BY-FILE DETAILED BREAKDOWN
-================================================================================
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.1  config.py — Central Configuration
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Single source of truth for ALL settings. No magic numbers in other files.
-  Every other file imports config and reads values from here.
-
-KEY SETTINGS EXPLAINED:
-
-  DATA_FOLDER = "Dataset"
-    → Where the batch1.dat ... batch10.dat files live.
-
-  TRAIN_BATCHES = [1, 2, 3, 4, 5]
-    → The model learns "normal" from these batches.
-    → These are the earliest data (freshest sensors).
-
-  TEST_BATCHES = [6, 7, 8, 9, 10]
-    → Never seen during training. Evaluated for anomalies.
-    → These are later batches where sensor drift has occurred.
-
-  NUM_FEATURES = 128
-    → 16 sensors × 8 features = 128. Fixed by the dataset.
-
-  HIDDEN_DIM = 64, LATENT_DIM = 32
-    → Autoencoder compresses 128 features → 64 → 32 → 64 → 128.
-    → The bottleneck (32) forces the model to learn a compact representation.
-
-  EPOCHS = 100, BATCH_SIZE = 256, LR = 1e-3
-    → Training hyperparameters for the autoencoder.
-
-  EARLY_STOP_PATIENCE = 10
-    → If loss doesn't improve for 10 consecutive epochs, stop training early.
-
-  CORR_THRESHOLD = 0.7
-    → Only feature pairs with |correlation| ≥ 0.7 are tracked.
-    → Lower = more pairs tracked (more sensitive, slower).
-    → Higher = fewer pairs (less sensitive, faster).
-
-  MAX_CORR_PAIRS = 500
-    → Cap on number of pairs so evaluation stays fast.
-
-  ALPHA = 0.6, BETA = 0.4
-    → How to weight the two error types when combining.
-    → α=0.6 means temporal error has slightly more influence.
-
-  ANOMALY_SIGMA = 2.0
-    → Threshold = mean + 2×std of training scores.
-    → ~95% of normal data falls below this (assuming roughly Gaussian).
-
-  SEED = 42
-    → For reproducibility. Same seed = same results every run.
-
-DEPENDS ON: nothing (this is the root config)
-USED BY:    every other file
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.2  preprocessing.py — Data Loading, Splitting, and Scaling
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Handles everything between "raw .dat files on disk" and "clean numpy arrays
-  ready for the models."
-
-FUNCTIONS:
-
-  load_batch(file_path, batch_id) → DataFrame
-    INPUT:  path to one .dat file + which batch number it is
-    WHAT:   Uses sklearn's load_svmlight_file to parse the LIBSVM sparse format.
-            Converts the sparse matrix to dense. Creates a DataFrame with
-            columns f0, f1, ..., f127, plus "batch" and "label" columns.
-    OUTPUT: DataFrame with shape (N_batch, 130)  [128 features + batch + label]
-
-  load_all_batches(folder) → DataFrame
-    INPUT:  path to Dataset/ folder
-    WHAT:   Loops from batch1.dat to batch10.dat, calls load_batch for each,
-            concatenates all into one big DataFrame.
-    OUTPUT: DataFrame with shape (13910, 130)
-    PRINTS: "[preprocessing] Loaded 13910 samples across 10 batches."
-
-  split_train_test(df, train_batches) → (train_df, test_df)
-    INPUT:  the full DataFrame + list of training batch numbers [1,2,3,4,5]
-    WHAT:   Filters rows by batch number. Batch 1–5 → train. Batch 6–10 → test.
-    OUTPUT: Two DataFrames (train has ~3633 rows, test has ~10277 rows)
-    PRINTS: "[preprocessing] Train: 3633 samples  |  Test: 10277 samples"
-
-  feature_columns(df) → list of column names
-    INPUT:  any DataFrame
-    WHAT:   Returns column names excluding "batch" and "label".
-    OUTPUT: ["f0", "f1", ..., "f127"]
-
-  scale_data(train_df, test_df, save_scaler) → (train_ndarray, test_ndarray, scaler)
-    INPUT:  train and test DataFrames
-    WHAT:   Fits StandardScaler on training data (mean=0, std=1),
-            then transforms BOTH train and test using the SAME scaler.
-            This prevents data leakage — test data is scaled using
-            train statistics only.
-            Saves the scaler object to disk so evaluate.py doesn't
-            need to recompute it.
-    OUTPUT: train_scaled (3633, 128) numpy array
-            test_scaled  (10277, 128) numpy array
-            scaler object
-
-DEPENDS ON: config.py
-USED BY:    train.py, evaluate.py
-
-WHY STANDARDSCALER?
-  Raw feature values have wildly different scales (resistance vs EMA).
-  Without scaling, features with large ranges dominate the autoencoder loss.
-  After scaling, every feature has mean≈0 and std≈1, so they contribute equally.
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.3  temporal_model.py — Autoencoder (Temporal/Reconstruction Path)
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Defines the neural network that learns to reconstruct "normal" feature
-  vectors. If it can't reconstruct a sample well → that sample is abnormal.
-
-CLASS: Autoencoder(nn.Module)
-
-  Architecture:
-    ENCODER:  128 → Linear → BatchNorm → ReLU → Dropout → 64
-               64 → Linear → BatchNorm → ReLU → 32
-    DECODER:   32 → Linear → BatchNorm → ReLU → Dropout → 64
-               64 → Linear → 128
-
-  Why this shape?
-    The bottleneck at 32 dimensions forces the network to learn a COMPRESSED
-    representation. It can only keep the most important patterns. Random noise
-    or anomalous patterns can't be stored in 32 dims, so they get poorly
-    reconstructed → high reconstruction error.
-
-  BatchNorm:
-    Normalises activations within each layer. Helps training converge faster
-    and more stably.
-
-  Dropout (0.2 = 20%):
-    Randomly zeroes 20% of neuron outputs during training. Prevents
-    overfitting — forces the network to learn redundant, robust features.
-
-  METHODS:
-
-    forward(x) → reconstructed_x
-      INPUT:  (N, 128) tensor of samples
-      WHAT:   Encodes then decodes
-      OUTPUT: (N, 128) tensor of reconstructions
-
-    reconstruction_error(x) → per_sample_mse
-      INPUT:  (N, 128) tensor
-      WHAT:   Runs forward pass, computes mean squared error PER SAMPLE
-              (not averaged across all samples — each sample gets its own score)
-      OUTPUT: (N,) tensor where value[i] = MSE for sample i
-      NOTE:   Runs in eval mode (no dropout) and with torch.no_grad()
-              (no gradient computation — faster, less memory)
-
-DEPENDS ON: nothing (pure PyTorch module)
-USED BY:    train.py (training), evaluate.py (inference)
-
-HOW TO THINK ABOUT IT:
-  Training:   "Here are 3633 normal samples. Learn to copy them."
-  Testing:    "Here's a new sample. How well can you copy it?"
-              High copy error = anomaly. Low copy error = normal.
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.4  relational_model.py — Cross-Sensor Relationship Module
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Learns how features relate to EACH OTHER in normal data. If sensor A and
-  sensor B are always correlated, and that correlation breaks in test data,
-  something is wrong — even if both sensors individually look fine.
-
-DATA STRUCTURE:
-
-  PairModel (dataclass):
-    i              — index of predictor feature (e.g., feature 3)
-    j              — index of response feature (e.g., feature 17)
-    slope          — OLS regression slope: f17 ≈ slope × f3 + intercept
-    intercept      — OLS regression intercept
-    train_residual_std — standard deviation of residuals on training data
-
-FUNCTIONS:
-
-  compute_baseline_correlations(train_data) → correlation_matrix
-    INPUT:  (3633, 128) training array
-    WHAT:   Computes Pearson correlation between ALL 128×128 feature pairs.
-    OUTPUT: (128, 128) correlation matrix.  Value at [i,j] = correlation
-            between feature i and feature j.  Diagonal = 1.0 (self-correlation).
-
-  select_correlated_pairs(corr_matrix, threshold=0.7) → list of (i, j) tuples
-    INPUT:  the 128×128 correlation matrix
-    WHAT:   Scans the upper triangle (to avoid duplicates).
-            Keeps pairs where |correlation| ≥ 0.7.
-            Sorts by strength (strongest first).
-            Keeps at most 500 pairs.
-    OUTPUT: e.g., [(3, 17), (5, 21), (0, 8), ...]
-    PRINTS: "[relational] Selected 347 correlated pairs (threshold=0.7)"
-
-  fit_pair_models(train_data, pairs) → list of PairModel
-    INPUT:  training array + list of (i, j) pairs
-    WHAT:   For each pair, fits a simple linear regression using numpy polyfit:
-              feature_j ≈ slope × feature_i + intercept
-            Also computes the residual standard deviation on training data.
-            This std is used later to z-score test residuals.
-    OUTPUT: list of PairModel objects (one per pair)
-
-    EXAMPLE:
-      If features 3 and 17 have correlation 0.92, the model might learn:
-        f17 = 1.34 × f3 + 0.05
-      with residual std = 0.28
-
-      At test time, if a sample has f3 = 2.0 and f17 = 5.0:
-        predicted f17 = 1.34 × 2.0 + 0.05 = 2.73
-        actual f17 = 5.0
-        residual = |5.0 − 2.73| / 0.28 = 8.1 standard deviations
-        → Extremely anomalous relationship!
-
-  build_relational_module(train_data) → (corr_matrix, pair_models)
-    INPUT:  training array
-    WHAT:   Convenience function that calls the three functions above in order.
-    OUTPUT: the correlation matrix + list of pair models
-
-  save_relational_artifacts / load_relational_artifacts
-    WHAT:   Persists/loads the correlation matrix (.npy) and pair models (.pkl)
-            to/from the outputs/ folder.
-
-  relational_error_single(sample, pair_models) → float
-    INPUT:  one sample (128-dim vector) + the pair models
-    WHAT:   For EACH pair model:
-              1. Predict feature_j from feature_i using the learned slope/intercept
-              2. Compute |actual − predicted| / train_residual_std (z-score)
-              3. Square it
-            Average all squared z-scores.
-    OUTPUT: single float = mean squared z-scored residual for this sample
-
-  compute_relational_errors(data, pair_models) → (N,) array
-    INPUT:  (N, 128) array + pair models
-    WHAT:   Calls relational_error_single for each of the N samples.
-            Shows a progress bar via tqdm.
-    OUTPUT: (N,) array of relational errors
-
-DEPENDS ON: config.py, numpy, tqdm
-USED BY:    train.py (fitting), evaluate.py (scoring)
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.5  anomaly_score.py — Unified Score Computation
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Takes the two separate error arrays (temporal + relational) and combines
-  them into a single anomaly score per sample.
-
-THE PROBLEM IT SOLVES:
-  Temporal errors might be in range [0.001, 0.5]
-  Relational errors might be in range [0.5, 200.0]
-  If you just add them, relational errors dominate completely.
-  Solution: min-max normalise both to [0, 1] first, THEN combine.
-
-FUNCTIONS:
-
-  _minmax(arr) → normalised_arr
-    INPUT:  any 1-D numpy array
-    WHAT:   Maps minimum value → 0, maximum value → 1. Linear scaling.
-    OUTPUT: array in [0, 1]
-
-  compute_combined_scores(temporal_errors, relational_errors) → scores
-    INPUT:  two (N,) arrays
-    WHAT:   Normalises each to [0,1], then computes:
-              S = 0.6 × temporal_norm + 0.4 × relational_norm
-    OUTPUT: (N,) array of combined anomaly scores in [0, 1]
-
-  compute_threshold(scores, sigma=2.0) → float
-    INPUT:  array of scores (typically from TRAINING data)
-    WHAT:   threshold = mean(scores) + 2.0 × std(scores)
-    OUTPUT: a single float value
-
-    WHY TRAIN SCORES FOR THRESHOLD?
-      We set the threshold based on how the model scores NORMAL (training)
-      data. If a test sample scores much higher than what was normal,
-      it's an anomaly. Using test scores for the threshold would be circular.
-
-  flag_anomalies(scores, threshold) → boolean array
-    INPUT:  (N,) scores + threshold value
-    OUTPUT: (N,) boolean array — True where score > threshold
-
-DEPENDS ON: config.py, numpy
-USED BY:    evaluate.py
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.6  train.py — Training Orchestrator
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  The main training entry point. Orchestrates data loading, autoencoder
-  training, and relational module fitting. Saves all artifacts.
-
-EXECUTION ORDER WHEN YOU RUN "python train.py":
-
-  1. seed_everything(42)
-     → Sets random seeds for Python, NumPy, and PyTorch so results are
-       reproducible across runs.
-
-  2. load_all_batches()
-     → Reads all 10 .dat files → DataFrame of 13,910 rows × 130 columns.
-
-  3. split_train_test(df)
-     → Splits into train (batches 1–5, 3633 rows) and test (batches 6–10,
-       10277 rows).
-
-  4. scale_data(train_df, test_df)
-     → Fits StandardScaler on train, transforms both. Saves scaler.pkl.
-
-  5. train_autoencoder(train_scaled, 128)
-     → Creates Autoencoder(128 → 64 → 32 → 64 → 128).
-     → Creates a DataLoader that feeds 256 samples at a time (mini-batches).
-     → Training loop:
-         For each epoch (up to 100):
-           For each mini-batch of 256 samples:
-             a. Forward pass: feed batch through autoencoder → get reconstruction
-             b. Compute MSE loss between input and reconstruction
-             c. Backward pass: compute gradients
-             d. Optimizer step: update weights
-           End mini-batch loop
-           Compute average epoch loss
-           Learning rate scheduler: if loss plateaus, halve the learning rate
-           Early stopping: if loss hasn't improved for 10 epochs, stop
-           Save best model weights
-         End epoch loop
-     → Loads best weights back into model.
-     → Saves autoencoder.pth.
-
-  6. build_relational_module(train_scaled)
-     → Computes 128×128 correlation matrix.
-     → Selects pairs with |r| ≥ 0.7 (up to 500 pairs).
-     → Fits linear regression for each pair.
-
-  7. save_relational_artifacts(baseline_corr, pair_models)
-     → Saves baseline_corr.npy and relation_models.pkl.
-
-  8. Done! All artifacts in outputs/.
-
-WHAT GETS SAVED:
-  outputs/autoencoder.pth       — trained neural network weights
-  outputs/baseline_corr.npy     — 128×128 training correlation matrix
-  outputs/relation_models.pkl   — list of PairModel objects (slope, intercept, etc.)
-  outputs/scaler.pkl            — StandardScaler fitted on training data
-
-DEPENDS ON: config.py, preprocessing.py, temporal_model.py, relational_model.py
-USED BY:    you (run it first!)
-
-
-────────────────────────────────────────────────────────────────────────────────
-5.7  evaluate.py — Evaluation & Visualisation
-────────────────────────────────────────────────────────────────────────────────
-
-PURPOSE:
-  Loads trained artifacts, scores every test sample, flags anomalies,
-  prints a report, and generates 4 plots.
-
-EXECUTION ORDER WHEN YOU RUN "python evaluate.py":
-
-  1. Load data (same as train.py steps 2–4, but doesn't retrain anything).
-
-  2. Load trained artifacts:
-     → autoencoder.pth → Autoencoder model
-     → relation_models.pkl → list of PairModel
-
-  3. Compute TEMPORAL ERRORS on test data:
-     → Feed all 10,277 test samples through autoencoder.
-     → Get per-sample MSE. Shape: (10277,)
-     → Prints mean and std of temporal errors.
-
-  4. Compute RELATIONAL ERRORS on test data:
-     → For each of the 10,277 test samples, compute mean squared z-scored
-       residual across all pair models. Shape: (10277,)
-     → Prints mean and std of relational errors.
-
-  5. Compute COMBINED SCORES:
-     → S = 0.6 × normalised_temporal + 0.4 × normalised_relational
-     → Shape: (10277,)
-
-  6. Compute THRESHOLD from TRAINING scores:
-     → Also scores all 3,633 training samples (both temporal + relational).
-     → threshold = mean(train_scores) + 2 × std(train_scores)
-     → This is the cutoff: any test score above this is an anomaly.
-
-  7. Flag anomalies:
-     → anomalies = (scores > threshold)  →  boolean array
-
-  8. Print REPORT:
-     → Total anomalies detected, overall anomaly rate
-     → Per-batch breakdown (how many anomalies in batch 6, 7, 8, 9, 10)
-     → EXPECTED: later batches (9, 10) should have MORE anomalies because
-       sensor drift is worse over time.
-
-  9. Generate 4 PLOTS saved to outputs/figures/:
-
-     score_distribution.png
-       → Histogram of all test anomaly scores with threshold line.
-       → Shows the distribution shape and where the cutoff falls.
-
-     scores_by_batch.png
-       → Box plot of scores grouped by batch (6, 7, 8, 9, 10).
-       → Visually shows increasing drift: later batches have higher scores.
-
-     temporal_vs_relational.png
-       → Scatter plot: x-axis = temporal error, y-axis = relational error.
-       → Normal points in blue, anomalies in red.
-       → Shows which error type contributed more to each anomaly.
-
-     anomaly_rate_by_batch.png
-       → Bar chart: anomaly rate (%) per batch.
-       → Should show increasing rates in later batches.
-
-  10. Save raw results to outputs/results.npz:
-      → Contains: scores, temporal_errors, relational_errors, anomalies,
-        batch_ids, threshold.  Loadable with np.load() for further analysis.
-
-DEPENDS ON: config.py, preprocessing.py, temporal_model.py, relational_model.py,
-            anomaly_score.py
-USED BY:    you (run it after train.py!)
-
-
-================================================================================
-6. WHAT GETS SAVED WHERE (outputs/ FOLDER)
-================================================================================
-
-After running train.py + evaluate.py, the outputs/ folder contains:
-
-outputs/
-├── autoencoder.pth          # PyTorch model weights (temporal module)
-├── baseline_corr.npy        # 128×128 correlation matrix from training data
-├── relation_models.pkl      # List of PairModel objects (relational module)
-├── scaler.pkl               # StandardScaler fitted on training data
-├── results.npz              # All raw evaluation results (numpy archive)
-└── figures/
-    ├── score_distribution.png       # Histogram of anomaly scores
-    ├── scores_by_batch.png          # Box plots per batch
-    ├── temporal_vs_relational.png   # Scatter: temp error vs rel error
-    └── anomaly_rate_by_batch.png    # Bar chart: % anomalies per batch
-
-
-================================================================================
-7. HOW ANOMALIES ARE ACTUALLY DETECTED — STEP BY STEP EXAMPLE
-================================================================================
-
-Let's trace ONE test sample through the entire pipeline:
-
-  Sample #42 from Batch 8: [v0, v1, v2, ..., v127]  (128 raw values)
-
-STEP 1: SCALING
-  The scaler (fitted on training data) transforms each value:
-    scaled_vi = (vi − mean_i) / std_i
-  Now the sample is in standardised space.
-
-STEP 2: TEMPORAL ERROR
-  Feed the scaled 128-dim vector through the autoencoder:
-    Input:  [s0, s1, ..., s127]
-    Output: [r0, r1, ..., r127]  (reconstruction)
-  Compute MSE:
-    E_temporal = (1/128) × Σ (si − ri)²
-  Let's say E_temporal = 0.032
-
-STEP 3: RELATIONAL ERROR
-  For each of the ~347 pair models (e.g., pair i=3, j=17):
-    predicted_j = 1.34 × s3 + 0.05
-    actual_j = s17
-    z_residual = |s17 − predicted_j| / 0.28
-    squared_z = z_residual²
-  Average across all 347 pairs:
-    E_relational = (1/347) × Σ squared_z
-  Let's say E_relational = 4.7
-
-STEP 4: NORMALISATION
-  Min-max normalise both errors across ALL test samples:
-    T_norm = (0.032 − min_temporal) / (max_temporal − min_temporal) = 0.15
-    R_norm = (4.7 − min_relational) / (max_relational − min_relational) = 0.62
-
-STEP 5: COMBINED SCORE
-    S = 0.6 × 0.15 + 0.4 × 0.62 = 0.09 + 0.248 = 0.338
-
-STEP 6: THRESHOLD CHECK
-  Threshold (computed from training scores) = 0.29
-
-  S = 0.338 > 0.29?  → YES → ANOMALY DETECTED!
-
-  This sample's feature values individually weren't too extreme (temporal
-  error = 0.15 normalised), but the cross-sensor relationships were broken
-  (relational error = 0.62 normalised). The combined score pushed it over
-  the threshold.
-
-
-================================================================================
-8. HYPERPARAMETER TUNING GUIDE
-================================================================================
-
-If you want to adjust the system's sensitivity:
-
-MORE ANOMALIES DETECTED (more sensitive):
-  - Decrease ANOMALY_SIGMA (e.g., 1.5 instead of 2.0) → lower threshold
-  - Decrease CORR_THRESHOLD (e.g., 0.5) → track more feature pairs
-  - Increase BETA (e.g., 0.6) → emphasise relational drift more
-
-FEWER ANOMALIES DETECTED (less sensitive):
-  - Increase ANOMALY_SIGMA (e.g., 3.0) → higher threshold
-  - Increase CORR_THRESHOLD (e.g., 0.9) → only very strong correlations
-  - Increase ALPHA (e.g., 0.8) → emphasise reconstruction error more
-
-BETTER AUTOENCODER:
-  - Increase EPOCHS (e.g., 200) if it's still improving when it stops
-  - Decrease LR (e.g., 1e-4) for finer convergence
-  - Increase HIDDEN_DIM / LATENT_DIM for more capacity (risk overfitting)
-  - Decrease DROPOUT (e.g., 0.1) if underfitting
-
-
-================================================================================
-                              END OF DOCUMENTATION
+1. PROJECT OVERVIEW & ARCHITECTURE
+We built an unsupervised anomaly detection system for the UCI Gas Sensor Array 
+Drift Dataset (16 sensors x 8 features = 128 features over 36 months).
+The goal: Detect natural hardware drift as sensors degrade over time.
+We use Batches 1-5 for training (learning "normal") and Batches 6-10 for testing.
+
+WHAT IS AN ANOMALY IN THIS CONTEXT?
+An anomaly here refers to data points where the sensor output diverges from the established
+"normal" profile learned during the initial 36 months of sensor life (Batches 1-5). 
+These aren't necessarily spikes caused by a different gas, but rather represent 
+"sensor drift" - physical degradation of the sensors resulting in shifted or broken
+response patterns compared to their fresh state.
+
+The system uses a MULTI-MODEL detection approach combined as S = α*T + β*R.
+
+2. DETAILED MODEL OPERATION
+
+A) TEMPORAL PATH (Autoencoder)
+   - Purpose: Detects when individual sensor readings fall outside normal ranges.
+   - Architecture: 128 -> 64 -> 32 (Latent Bottleneck) -> 64 -> 128. 
+     (Uses BatchNorm and Dropout=0.2 for regularization).
+   - How it works: The Autoencoder is trained only on Batches 1-5. It learns to 
+     compress the 128 features into a 32-dimensional space and reconstruct them.
+     It becomes very good at reconstructing "normal" data. When an abnormal sample 
+     arrives (e.g. degraded sensor), the bottleneck prevents accurate reconstruction.
+   - Error Metric: Mean Squared Error (MSE) between the input vector and the 
+     reconstructed vector. High MSE means high temporal anomaly score.
+
+B) RELATIONAL PATH (Correlation Pairs)
+   - Purpose: Detects when the historical relationship between two sensors breaks, 
+     even if their individual values seem normal to the Autoencoder.
+   - How it works: 
+     1. During training, computes the Pearson correlation matrix for all 128x128 pairs.
+     2. Selects strongly correlated pairs (|r| >= 0.7), capped at 500 pairs.
+     3. For each pair (i, j), fits a simple Ordinary Least Squares (OLS) linear regression: 
+        Feature_j = (Slope * Feature_i) + Intercept. It also records the training 
+        residual standard deviation.
+     4. During testing, it uses feature i to predict feature j. 
+   - Error Metric: It calculates the z-scored residual: 
+     |Actual_j - Predicted_j| / Train_Residual_Std. 
+     The final relational error for a sample is the mean of squared z-scores across 
+     all tracked pairs.
+
+3. CORE CONFIGURATION & SCORING LOGIC
+Scores are normalized to [0,1] then combined: S = (alpha * Temporal_Norm) + (beta * Relational_Norm)
+- ALPHA: Weight for autoencoder MSE (default 0.6).
+- BETA: Weight for relational error (default 0.4).
+- CORR_THRESHOLD: Minimum correlation to track a pair (default 0.7).
+- THRESHOLD_METHOD: Determines the anomaly cutoff using training scores 
+  (e.g., mean + 2*std or 98th percentile).
+
+4. EXPERIMENT RESULTS SUMMARY
+Recorded in outputs/experiment_comparison.csv:
+
+  [Exp 1: Baseline] (exp_baseline.json)
+  - Settings: alpha=0.6, beta=0.4, threshold=mean_std, corr_threshold=0.7
+  - Anomalies Detected: 234 / 10277 (2.28%)
+  - Drift Trend: Anomalies exclusively peaked in Batch 10 (232 anomalies, 6.4% rate), 
+    confirming severe late-stage sensor drift.
+
+  [Exp 2: Sensitive] (exp_sensitive.json)
+  - Settings: alpha=0.55, beta=0.45, threshold=percentile (98th), corr_threshold=0.65
+  - Anomalies Detected: 237 / 10277 (2.31%)
+  - Outcome: Slightly more weight on relationships; detected marginally more anomalies.
+
+  [Exp 3: Conservative] (exp_conservative.json)
+  - Settings: alpha=0.7, beta=0.3, threshold=mean_std, corr_threshold=0.75
+  - Anomalies Detected: 288 / 10277 (2.80%)
+  - Outcome: Unexpectedly higher anomalies flagged due to strict pair limits.
+
+5. CONCLUSION
+The combined Temporal + Relational approach maps natural sensor degradation effectively.
+Early test batches (6, 7) show near 0% anomaly rates, while the final batch (10) 
+exhibits widespread failures, validating that long-term sensor drift is captured.
+
+6. REFERENCES
+- https://ieeexplore.ieee.org/document/9915308
+- https://ieeexplore.ieee.org/document/10890275
 ================================================================================

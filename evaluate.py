@@ -4,15 +4,17 @@ samples, detects anomalies, and produces visualisations.
 
 Usage:
     python evaluate.py
+    python evaluate.py --config configs/exp_baseline.json
 """
 
 import os
+import json
+import argparse
 import numpy as np
 import torch
 import matplotlib
 matplotlib.use("Agg")                       # non-interactive backend
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 import config
 from preprocessing import load_all_batches, split_train_test, scale_data
@@ -32,6 +34,17 @@ def load_trained_model(input_dim: int) -> Autoencoder:
     model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device, weights_only=True))
     model.to(device).eval()
     return model
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate drift-aware anomaly model")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to JSON config overrides (optional)",
+    )
+    return parser.parse_args()
 
 
 # ── Plotting helpers ─────────────────────────────────────────────────────────
@@ -121,69 +134,109 @@ def plot_anomaly_rate_by_batch(
 # ── Main evaluation ──────────────────────────────────────────────────────────
 
 def main() -> None:
-    print("=" * 60)
-    print("  EVALUATION – Drift-Aware Anomaly Detection")
-    print("=" * 60)
+    args = parse_args()
+    if args.config:
+        config.apply_overrides_from_json(args.config)
 
-    # ── 1. Load data 
+    print("\n" + "=" * 70)
+    print(f"EVALUATION | experiment={config.EXPERIMENT_NAME} | output={config.OUTPUT_DIR}")
+    print("=" * 70)
+
+    # ── 1. Load data
     df = load_all_batches()
     train_df, test_df = split_train_test(df)
-    train_scaled, test_scaled, scaler = scale_data(train_df, test_df, save_scaler=False)
+    train_scaled, test_scaled, _ = scale_data(train_df, test_df, save_scaler=False)
 
     input_dim = train_scaled.shape[1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ── 2. Load trained artifacts 
+    # ── 2. Load trained artifacts
     model = load_trained_model(input_dim)
     _, pair_models = load_relational_artifacts()
+    print(f"[evaluate] Loaded {len(pair_models)} pair models")
 
-    # ── 3. Temporal errors 
+    # ── 3. Temporal errors
     print("\n── Computing Temporal Errors ──")
     test_tensor = torch.tensor(test_scaled, dtype=torch.float32).to(device)
     temporal_errors = model.reconstruction_error(test_tensor).cpu().numpy()
-    print(f"  Temporal error  →  mean={temporal_errors.mean():.6f}  std={temporal_errors.std():.6f} Error : {temporal_errors}")
+    print(
+        "  Temporal error stats -> "
+        f"mean={temporal_errors.mean():.6f}, std={temporal_errors.std():.6f}"
+    )
 
-    # ── 4. relational errors 
+    # ── 4. Relational errors
     print("\n── Computing Relational Errors ──")
     relational_errors = compute_relational_errors(test_scaled, pair_models, desc="Test relational errors")
-    print(f"  Relational error →  mean={relational_errors.mean():.6f}  std={relational_errors.std():.6f} Error : {relational_errors}")
+    print(
+        "  Relational error stats -> "
+        f"mean={relational_errors.mean():.6f}, std={relational_errors.std():.6f}"
+    )
 
-    # ── 5. Combined scores 
-    scores = compute_combined_scores(temporal_errors, relational_errors)
+    # ── 5. Combined scores
+    scores = compute_combined_scores(
+        temporal_errors,
+        relational_errors,
+        alpha=config.ALPHA,
+        beta=config.BETA,
+        norm_method=config.SCORE_NORM_METHOD,
+    )
 
     # Compute threshold on training scores for a principled cutoff
     train_tensor = torch.tensor(train_scaled, dtype=torch.float32).to(device)
     train_temporal = model.reconstruction_error(train_tensor).cpu().numpy()
     train_relational = compute_relational_errors(train_scaled, pair_models, desc="Train relational errors")
-    train_scores = compute_combined_scores(train_temporal, train_relational)
-    print(f"Combined score is {train_scores}")
-    threshold = compute_threshold(train_scores, sigma=config.ANOMALY_SIGMA)
+    train_scores = compute_combined_scores(
+        train_temporal,
+        train_relational,
+        alpha=config.ALPHA,
+        beta=config.BETA,
+        norm_method=config.SCORE_NORM_METHOD,
+    )
+    threshold = compute_threshold(
+        train_scores,
+        sigma=config.ANOMALY_SIGMA,
+        method=config.THRESHOLD_METHOD,
+        percentile=config.ANOMALY_PERCENTILE,
+    )
 
     anomalies = flag_anomalies(scores, threshold)
 
     # ── 6. Report
     batch_ids = test_df["batch"].values
-    print("\n" + "=" * 60)
-    print("  RESULTS")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print("RESULTS")
+    print("=" * 70)
+    print(f"  Threshold method   : {config.THRESHOLD_METHOD}")
+    if config.THRESHOLD_METHOD == "mean_std":
+        print(f"  Sigma              : {config.ANOMALY_SIGMA:.3f}")
+    else:
+        print(f"  Percentile         : {config.ANOMALY_PERCENTILE:.2f}")
     print(f"  Threshold          : {threshold:.6f}")
     print(f"  Total test samples : {len(scores)}")
-    print(f"  Anomalies detected : {anomalies.sum()}")
+    print(f"  Anomalies detected : {int(anomalies.sum())}")
     print(f"  Anomaly rate       : {anomalies.mean() * 100:.2f}%")
+    print(f"  Score mean/std     : {scores.mean():.6f} / {scores.std():.6f}")
     print()
 
+    per_batch = {}
     for b in sorted(np.unique(batch_ids)):
         mask = batch_ids == b
         n_total = mask.sum()
         n_anom = anomalies[mask].sum()
         rate = anomalies[mask].mean() * 100
+        per_batch[int(b)] = {
+            "total": int(n_total),
+            "anomalies": int(n_anom),
+            "rate_percent": float(rate),
+            "score_mean": float(scores[mask].mean()),
+        }
         print(f"  Batch {b:>2}: {n_anom:>5} / {n_total:>5} anomalies  ({rate:.1f}%)")
 
     # ── 7. Visualisations
     fig_dir = os.path.join(config.OUTPUT_DIR, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
-    # plot_score_distribution(scores, threshold, os.path.join(fig_dir, "score_distribution.png"))
+    plot_score_distribution(scores, threshold, os.path.join(fig_dir, "score_distribution.png"))
     plot_scores_by_batch(scores, batch_ids, threshold, os.path.join(fig_dir, "scores_by_batch.png"))
     plot_error_components(
         temporal_errors / (temporal_errors.max() + 1e-12),
@@ -193,18 +246,53 @@ def main() -> None:
     )
     plot_anomaly_rate_by_batch(anomalies, batch_ids, os.path.join(fig_dir, "anomaly_rate_by_batch.png"))
 
-    # save raw scores
+    # Save raw arrays.
+    results_path = os.path.join(config.OUTPUT_DIR, "results.npz")
     np.savez(
-        os.path.join(config.OUTPUT_DIR, "results.npz"),
+        results_path,
         scores=scores,  
         temporal_errors=temporal_errors,
         relational_errors=relational_errors,
         anomalies=anomalies,
         batch_ids=batch_ids,
         threshold=threshold,
-    )   
-    print(f"\n[evaluate] Raw results saved → {os.path.join(config.OUTPUT_DIR, 'results.npz')}")
-    print("\n✓ Evaluation complete.")
+    )
+
+    summary = {
+        "experiment": config.EXPERIMENT_NAME,
+        "output_dir": config.OUTPUT_DIR,
+        "threshold_method": config.THRESHOLD_METHOD,
+        "threshold": float(threshold),
+        "num_test_samples": int(len(scores)),
+        "num_anomalies": int(anomalies.sum()),
+        "anomaly_rate_percent": float(anomalies.mean() * 100),
+        "score_mean": float(scores.mean()),
+        "score_std": float(scores.std()),
+        "per_batch": per_batch,
+        "hyperparameters": {
+            "alpha": config.ALPHA,
+            "beta": config.BETA,
+            "score_norm_method": config.SCORE_NORM_METHOD,
+            "sigma": config.ANOMALY_SIGMA,
+            "percentile": config.ANOMALY_PERCENTILE,
+            "corr_threshold": config.CORR_THRESHOLD,
+            "max_corr_pairs": config.MAX_CORR_PAIRS,
+            "hidden_dim": config.HIDDEN_DIM,
+            "latent_dim": config.LATENT_DIM,
+            "dropout": config.DROPOUT,
+            "epochs": config.EPOCHS,
+            "batch_size": config.BATCH_SIZE,
+            "lr": config.LR,
+            "weight_decay": config.WEIGHT_DECAY,
+        },
+    }
+    summary_path = os.path.join(config.OUTPUT_DIR, "summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\n[evaluate] Raw arrays saved -> {results_path}")
+    print(f"[evaluate] Summary saved   -> {summary_path}")
+    print("[evaluate] Evaluation complete")
 
 
 if __name__ == "__main__":
